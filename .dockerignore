@@ -3,7 +3,6 @@ __pycache__/
 .env
 .env.*
 !.env.example
-credentials.json
 .git/
 .gitignore
 .dockerignore

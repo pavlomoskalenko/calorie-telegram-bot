@@ -160,7 +160,9 @@ gcloud builds submit \
 
 This uploads your code, builds the Docker image in the cloud, and stores it. Takes 1-3 minutes the first time.
 
-### 5.8) Deploy to Cloud Run (first deploy)
+### 5.8) Get the service URL
+
+Deploy a placeholder revision to reserve the service URL. This revision will fail (no `WEBHOOK_URL` yet) -- that's expected:
 
 ```bash
 gcloud run deploy ${SERVICE_NAME} \
@@ -168,6 +170,7 @@ gcloud run deploy ${SERVICE_NAME} \
   --region ${REGION} \
   --platform managed \
   --allow-unauthenticated \
+  --no-traffic \
   --set-env-vars "TELEGRAM_BOT_TOKEN=<your-telegram-token>" \
   --set-env-vars "OPENAI_API_KEY=<your-openai-key>" \
   --set-env-vars "GOOGLE_SHEET_NAME=<exact spreadsheet title>" \
@@ -176,31 +179,30 @@ gcloud run deploy ${SERVICE_NAME} \
   --set-env-vars "WEBHOOK_SECRET=<pick-any-random-string>"
 ```
 
-Replace the `<...>` placeholders with your real values. **Do not set `WEBHOOK_URL` yet** -- we need the service URL first.
-
-Notes:
-- `--allow-unauthenticated` is required so Telegram can reach the webhook endpoint.
-- Cloud Run scales to zero when idle (free). The first message after a cold period takes a few extra seconds while the container starts up.
-
-The deploy output will show:
+Grab the service URL from the output (or from the Cloud Run console):
 
 ```
 Service URL: https://calorie-bot-xxxxx-ew.a.run.app
 ```
 
-Copy this URL.
+### 5.9) Deploy with the webhook URL
 
-### 5.9) Set the webhook URL
-
-Redeploy with `WEBHOOK_URL` pointing to the service URL you just got:
+Now redeploy with `WEBHOOK_URL` set. This is the real deploy:
 
 ```bash
-gcloud run services update ${SERVICE_NAME} \
+gcloud run deploy ${SERVICE_NAME} \
+  --image ${REGION}-docker.pkg.dev/$(gcloud config get-value project)/cloud-run-source-deploy/${SERVICE_NAME} \
   --region ${REGION} \
+  --platform managed \
+  --allow-unauthenticated \
   --update-env-vars "WEBHOOK_URL=https://calorie-bot-xxxxx-ew.a.run.app"
 ```
 
-This triggers a new revision. Once live (a few seconds), the bot calls `setWebhook` on Telegram and starts receiving messages.
+Replace with your actual service URL. All other env vars carry over from step 5.8. Once live, the bot starts the webhook server on port 8080 and registers itself with Telegram.
+
+Notes:
+- `--allow-unauthenticated` is required so Telegram can reach the webhook endpoint.
+- Cloud Run scales to zero when idle (free). The first message after a cold period takes a few extra seconds while the container starts up.
 
 ### 5.10) Verify it works
 
