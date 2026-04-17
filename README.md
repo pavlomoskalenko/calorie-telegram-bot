@@ -23,11 +23,7 @@ As an extra safety net, the bot **recomputes** `kcal`, `protein`, `fat`, and `ca
 - **`log` is the source of truth** — every ingredient row with `kcal`, `protein`, `fat`, `carbs`.
 - **`daily` is derived** — for each date, totals are the sum of the corresponding columns in `log`. `deficit = target_kcal - total_kcal`.
 
-After each meal, the bot **recomputes and upserts** that day's row in `daily` so numbers stay current.
-
-A **scheduled job** runs once per day (default 00:05 in `TIMEZONE`) and refreshes **yesterday and today** in `daily`. That covers late-night entries, manual edits in `log`, or edge cases where you want an end-of-day reconciliation without sending another message.
-
-Adjust schedule with `DAILY_SYNC_HOUR` and `DAILY_SYNC_MINUTE` in `.env`.
+After each meal (and on `/today` or `/settarget`), the bot **recomputes and upserts** that day's row in `daily` so numbers stay current.
 
 ## Sheet layout
 
@@ -61,7 +57,6 @@ Fill:
 - `OPENAI_MODEL` (default `gpt-4o-mini`)
 - `TIMEZONE` (example: `Europe/Kyiv`)
 - `DEFAULT_TARGET_KCAL` (used for new days until you set a row or use `/settarget`)
-- `DAILY_SYNC_HOUR`, `DAILY_SYNC_MINUTE` (nightly refresh of `daily`)
 - `WEBHOOK_URL` (Cloud Run only — your service URL, e.g. `https://calorie-bot-xxxxx-ew.a.run.app`; leave empty for polling mode)
 - `WEBHOOK_SECRET` (optional — a stable secret token for validating Telegram webhook requests; if unset, a random one is generated each startup)
 
@@ -173,7 +168,6 @@ gcloud run deploy ${SERVICE_NAME} \
   --region ${REGION} \
   --platform managed \
   --allow-unauthenticated \
-  --min-instances 1 \
   --set-env-vars "TELEGRAM_BOT_TOKEN=<your-telegram-token>" \
   --set-env-vars "OPENAI_API_KEY=<your-openai-key>" \
   --set-env-vars "GOOGLE_SHEET_NAME=<exact spreadsheet title>" \
@@ -186,7 +180,7 @@ Replace the `<...>` placeholders with your real values. **Do not set `WEBHOOK_UR
 
 Notes:
 - `--allow-unauthenticated` is required so Telegram can reach the webhook endpoint.
-- `--min-instances 1` keeps the container always running so the nightly scheduler works. Set to `0` to save money (but nightly sync will only fire when the container is alive).
+- Cloud Run scales to zero when idle (free). The first message after a cold period takes a few extra seconds while the container starts up.
 
 The deploy output will show:
 
@@ -239,8 +233,9 @@ The `credentials.json` file is baked into the image via `COPY . .`. For producti
 
 ### Cost expectations
 
-- **Cloud Run free tier**: 2 million requests/month, 360,000 GB-seconds of memory, 180,000 vCPU-seconds. A personal calorie bot stays well within this.
-- **With `--min-instances 1`**: the always-on container uses ~0.5 GB memory, costing roughly $5-10/month after free tier. Set `--min-instances 0` to avoid this.
+A personal calorie bot stays well within the free tier:
+
+- **Cloud Run**: 2 million requests/month, 360,000 GB-seconds, 180,000 vCPU-seconds -- all free.
 - **Cloud Build**: 120 free build-minutes/day.
 - **Artifact Registry**: 500 MB free storage.
 
@@ -249,7 +244,7 @@ The `credentials.json` file is baked into the image via `COPY . .`. For producti
 - **"Permission denied" on deploy** -- run `gcloud auth login` again and check the project is correct.
 - **Bot does not reply** -- check logs. Common issues: wrong `TELEGRAM_BOT_TOKEN`, missing `WEBHOOK_URL`, or `credentials.json` not in the image.
 - **Sheets errors** -- make sure you shared the spreadsheet with the service account email and `GOOGLE_SHEET_NAME` matches exactly (including case).
-- **Cold start latency** -- first message after idle takes 3-5 seconds. Use `--min-instances 1` to avoid this.
+- **Cold start latency** -- first message after idle takes 3-5 seconds. This is normal with scale-to-zero.
 
 ## Commands
 

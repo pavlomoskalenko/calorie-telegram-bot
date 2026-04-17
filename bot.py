@@ -1,15 +1,13 @@
-import atexit
 import json
 import logging
 import os
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
 import gspread
-from apscheduler.schedulers.background import BackgroundScheduler
 from google.auth.exceptions import MalformedError
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -367,19 +365,6 @@ class CalorieBot:
 bot = CalorieBot()
 
 
-def nightly_daily_sync() -> None:
-    """Refresh daily rows from log for yesterday and today (handles late entries, manual log edits)."""
-    try:
-        now = datetime.now(bot.timezone)
-        today = now.strftime("%Y-%m-%d")
-        yesterday = (now.date() - timedelta(days=1)).isoformat()
-        for d in (yesterday, today):
-            bot.upsert_daily(d)
-        logger.info("Nightly daily sync completed for %s and %s", yesterday, today)
-    except Exception:
-        logger.exception("Nightly daily sync failed")
-
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "Send me your meal text and I will log ingredients into the 'log' sheet\n"
@@ -485,32 +470,7 @@ def _build_app() -> Application:
     return app
 
 
-def _start_scheduler() -> BackgroundScheduler:
-    tz_name = os.getenv("TIMEZONE", "UTC")
-    sync_hour = int(os.getenv("DAILY_SYNC_HOUR", "0"))
-    sync_minute = int(os.getenv("DAILY_SYNC_MINUTE", "5"))
-    scheduler = BackgroundScheduler(timezone=tz_name)
-    scheduler.add_job(
-        nightly_daily_sync,
-        "cron",
-        hour=sync_hour,
-        minute=sync_minute,
-        id="nightly_daily_sync",
-        replace_existing=True,
-    )
-    scheduler.start()
-    atexit.register(lambda: scheduler.shutdown(wait=False))
-    logger.info(
-        "Scheduled daily sheet sync at %02d:%02d (%s) - recomputes yesterday + today from log",
-        sync_hour,
-        sync_minute,
-        tz_name,
-    )
-    return scheduler
-
-
 def main() -> None:
-    _start_scheduler()
     app = _build_app()
 
     webhook_url = os.getenv("WEBHOOK_URL", "").strip()
