@@ -475,7 +475,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
 
 
-def main() -> None:
+def _build_app() -> Application:
+    app = Application.builder().token(bot.telegram_token).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_cmd))
+    app.add_handler(CommandHandler("today", today))
+    app.add_handler(CommandHandler("settarget", set_target))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    return app
+
+
+def _start_scheduler() -> BackgroundScheduler:
     tz_name = os.getenv("TIMEZONE", "UTC")
     sync_hour = int(os.getenv("DAILY_SYNC_HOUR", "0"))
     sync_minute = int(os.getenv("DAILY_SYNC_MINUTE", "5"))
@@ -496,14 +506,30 @@ def main() -> None:
         sync_minute,
         tz_name,
     )
+    return scheduler
 
-    app = Application.builder().token(bot.telegram_token).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_cmd))
-    app.add_handler(CommandHandler("today", today))
-    app.add_handler(CommandHandler("settarget", set_target))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.run_polling(close_loop=False)
+
+def main() -> None:
+    _start_scheduler()
+    app = _build_app()
+
+    webhook_url = os.getenv("WEBHOOK_URL", "").strip()
+    if webhook_url:
+        port = int(os.getenv("PORT", "8080"))
+        webhook_path = f"/telegram/{bot.telegram_token}"
+        secret_token = os.getenv("WEBHOOK_SECRET", uuid.uuid4().hex)
+        logger.info("Starting webhook on port %d (path %s)", port, webhook_path)
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=port,
+            url_path=webhook_path,
+            webhook_url=f"{webhook_url}{webhook_path}",
+            secret_token=secret_token,
+            close_loop=False,
+        )
+    else:
+        logger.info("No WEBHOOK_URL set — falling back to polling mode")
+        app.run_polling(close_loop=False)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+.env
+.env.*
+!.env.example
+credentials.json
+.git/
+.gitignore
+.dockerignore
+README.md
+*.md
