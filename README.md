@@ -1,260 +1,99 @@
 # Telegram Calorie & Macro Tracker Bot
 
-A Telegram bot that:
+A multi-user Telegram bot for daily calorie and macronutrient tracking. Each user connects their own Google Sheet — just send your service account key and spreadsheet title in Telegram.
 
-- reads your meal message (in any language — Russian, Ukrainian, English, etc.),
-- uses OpenAI to extract ingredients with calories and macronutrients (protein, fat, carbs),
-- writes ingredient names in **Ukrainian** to a Google Sheet `log` tab,
-- keeps a `daily` tab in sync (totals from log, deficit vs target, macro sums).
+Send a meal in any language and the bot will:
 
-## How calorie & macro estimation works
+- extract ingredients with calories and macros (protein, fat, carbs) via OpenAI,
+- write ingredient rows in **Ukrainian** to a `log` tab in your Google Sheet,
+- keep a `daily` tab in sync with running totals, target, and deficit.
+
+## Per-user setup
+
+Each user brings their own Google Sheet. No shared credentials are needed.
+
+1. **Create a service account** in Google Cloud (IAM & Admin -> Service Accounts -> Create -> Keys -> Add key -> JSON). Download the `.json` key file.
+2. **Share your spreadsheet** with the `client_email` from the JSON (Editor access).
+3. **Send the JSON file** to the bot in Telegram as a file attachment (paperclip -> File).
+4. **Run `/setsheet <exact title>`** with your spreadsheet title as shown in Google Sheets.
+
+The bot creates `log` and `daily` tabs automatically if they don't exist. Run `/setup` in the bot for step-by-step instructions.
+
+## Commands
+
+| Command | Description |
+|---|---|
+| _meal text_ | Log a meal, e.g. `2 eggs, toast with butter, coffee`. Works in any language. |
+| `/today` | Today's total kcal, target, deficit, and macros (P/F/C). |
+| `/settarget <kcal>` | Set calorie target for today. Add a date for another day: `/settarget 2200 2026-04-14`. |
+| `/setup` | Per-user Google Sheets setup guide. |
+| `/setsheet <title>` | Link your spreadsheet after uploading credentials. |
+| `/status` | Check whether your Google Sheets connection is configured. |
+| `/help` | Show available commands. |
+
+## How estimation works
 
 The bot instructs the model to follow a strict 4-step procedure for every ingredient:
 
 1. **Extract** each distinct food component from the message.
-2. **Estimate grams** — convert pieces, ml, spoons, cups, or vague portions to total grams (using standard weights like 1 egg ≈ 60 g).
+2. **Estimate grams** — convert pieces, ml, spoons, cups, or vague portions to total grams (using standard weights like 1 egg = 60 g).
 3. **Look up per-100 g values** — `kcal_per_100g`, `protein_per_100g`, `fat_per_100g`, `carbs_per_100g` from standard nutrition tables.
 4. **Compute** — `value = round(per_100g * grams / 100, 1)` for each metric.
 
-As an extra safety net, the bot **recomputes** `kcal`, `protein`, `fat`, and `carbs` server-side from the model's `grams` and `*_per_100g` fields, so arithmetic errors in the model's output are corrected before they reach the sheet.
-
-## Design: log vs daily
-
-- **`log` is the source of truth** — every ingredient row with `kcal`, `protein`, `fat`, `carbs`.
-- **`daily` is derived** — for each date, totals are the sum of the corresponding columns in `log`. `deficit = target_kcal - total_kcal`.
-
-After each meal (and on `/today` or `/settarget`), the bot **recomputes and upserts** that day's row in `daily` so numbers stay current.
+As a safety net, the bot **recomputes** all values server-side from the model's `grams` and `*_per_100g` fields, so arithmetic errors in the model output are corrected before reaching the sheet.
 
 ## Sheet layout
 
-**Tab `log`:** `logged_at`, `date`, `entry_id`, `ingredient`, `amount`, `unit`, `kcal`, `protein`, `fat`, `carbs`, `raw_input`, `note`
+**Tab `log`** (source of truth): `logged_at`, `date`, `entry_id`, `ingredient`, `amount`, `unit`, `kcal`, `protein`, `fat`, `carbs`, `raw_input`, `note`
 
-**Tab `daily`:** `date`, `total_kcal`, `target_kcal`, `deficit`, `total_protein`, `total_fat`, `total_carbs`
+**Tab `daily`** (derived): `date`, `total_kcal`, `target_kcal`, `deficit`, `total_protein`, `total_fat`, `total_carbs`
 
-## 1) Google Cloud and Sheet
+The `daily` tab is fully recomputed from `log` on every meal log, `/today`, and `/settarget`.
 
-1. Create a spreadsheet with tabs named exactly `log` and `daily`.
-2. In Google Cloud, enable Google Sheets API and Google Drive API.
-3. Create a service account and download its JSON key as `credentials.json` in this project folder.
-4. Share the spreadsheet with the service account email (Editor).
-
-## 2) Telegram bot
-
-1. Chat with [@BotFather](https://t.me/BotFather), create a bot, copy the token.
-
-## 3) Environment
+## Running locally
 
 ```bash
-cp .env.example .env
-```
-
-Fill:
-
-- `TELEGRAM_BOT_TOKEN`
-- `OPENAI_API_KEY`
-- `GOOGLE_SHEET_NAME` (exact spreadsheet title)
-- `GOOGLE_SHEETS_CREDENTIALS_FILE` (default `credentials.json`)
-- `OPENAI_MODEL` (default `gpt-4o-mini`)
-- `TIMEZONE` (example: `Europe/Kyiv`)
-- `DEFAULT_TARGET_KCAL` (used for new days until you set a row or use `/settarget`)
-- `WEBHOOK_URL` (Cloud Run only — your service URL, e.g. `https://calorie-bot-xxxxx-ew.a.run.app`; leave empty for polling mode)
-- `WEBHOOK_SECRET` (optional — a stable secret token for validating Telegram webhook requests; if unset, a random one is generated each startup)
-
-## 4) Running locally (polling mode)
-
-When `WEBHOOK_URL` is empty (or unset), the bot uses long-polling — no public URL needed:
-
-```bash
+cp .env.example .env   # fill in TELEGRAM_BOT_TOKEN and OPENAI_API_KEY
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 python bot.py
 ```
 
-## 5) Deploying to Cloud Run (webhook mode)
+When `WEBHOOK_URL` is empty, the bot uses long-polling — no public URL needed. User configs are stored on disk under `user_data/` by default.
 
-Cloud Run requires webhook mode because it only handles incoming HTTP requests. This is a full walkthrough from scratch -- no prior GCP experience needed.
+## Environment variables
 
-### 5.1) Install the gcloud CLI
+See `.env.example` for the full list. Key ones:
 
-Download and install from https://cloud.google.com/sdk/docs/install, then verify:
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | yes | — | Telegram bot token from @BotFather |
+| `OPENAI_API_KEY` | yes | — | OpenAI API key (billed to the bot host) |
+| `OPENAI_MODEL` | no | `gpt-4o-mini` | Model for nutrition extraction |
+| `TIMEZONE` | no | `UTC` | Default timezone for new users |
+| `DEFAULT_TARGET_KCAL` | no | `2000` | Default daily calorie target |
+| `USER_CONFIG_BACKEND` | no | auto | `firestore` or `filesystem`. Auto-detects GCP if empty. |
+| `FIRESTORE_COLLECTION` | no | `user_configs` | Firestore collection name |
+| `USER_DATA_DIR` | no | `user_data` | Directory for filesystem backend |
+| `WEBHOOK_URL` | no | — | Cloud Run service URL. Empty = polling mode. |
+| `WEBHOOK_SECRET` | no | random | Secret for validating Telegram webhooks |
 
-```bash
-gcloud --version
-```
-
-### 5.2) Create a GCP project
-
-1. Go to https://console.cloud.google.com
-2. Click the project dropdown at the top left, then **New Project**.
-3. Name it something like `calorie-bot`, click **Create**.
-4. Make sure the new project is selected in the dropdown.
-5. GCP offers a free trial with $300 credit -- accept it if prompted.
-
-Then authenticate locally and set the project:
-
-```bash
-gcloud auth login
-gcloud config set project YOUR_PROJECT_ID
-```
-
-Your project ID is shown on the project dashboard (e.g. `calorie-bot-123456`).
-
-### 5.3) Enable required APIs
-
-```bash
-gcloud services enable \
-  run.googleapis.com \
-  cloudbuild.googleapis.com \
-  artifactregistry.googleapis.com \
-  sheets.googleapis.com \
-  drive.googleapis.com
-```
-
-### 5.4) Create a service account for Google Sheets
-
-If you already have a `credentials.json` from earlier, skip to 5.5.
-
-1. Go to **IAM & Admin -> Service Accounts** in the console (https://console.cloud.google.com/iam-admin/serviceaccounts).
-2. Click **Create Service Account**. Name: `sheets-bot`, click **Create and Continue**.
-3. Skip the optional role grants, click **Done**.
-4. Click into the new service account, go to the **Keys** tab.
-5. Click **Add Key -> Create new key -> JSON -> Create**.
-6. A `.json` file downloads. Rename it to `credentials.json` and place it in the project root.
-
-Then share your Google Sheet:
-
-1. Open `credentials.json`, copy the `client_email` value (e.g. `sheets-bot@calorie-bot-123456.iam.gserviceaccount.com`).
-2. Open your Google Spreadsheet, click **Share**, paste that email, give **Editor** access.
-
-### 5.5) Set shell variables
-
-Pick a region close to you. For Ukraine, `europe-west1` (Belgium) or `europe-central2` (Warsaw) work well:
-
-```bash
-export REGION=europe-west1
-export SERVICE_NAME=calorie-bot
-```
-
-### 5.6) Create an Artifact Registry repository
-
-Cloud Build needs a place to store Docker images:
-
-```bash
-gcloud artifacts repositories create cloud-run-source-deploy \
-  --repository-format=docker \
-  --location=${REGION} \
-  --description="Docker images for Cloud Run"
-```
-
-### 5.7) Build the container image
-
-From the project directory:
-
-```bash
-cd /path/to/calorie-telegram-bot
-
-gcloud builds submit \
-  --tag ${REGION}-docker.pkg.dev/$(gcloud config get-value project)/cloud-run-source-deploy/${SERVICE_NAME}
-```
-
-This uploads your code, builds the Docker image in the cloud, and stores it. Takes 1-3 minutes the first time.
-
-### 5.8) Get the service URL
-
-Deploy a placeholder revision to reserve the service URL. This revision will fail (no `WEBHOOK_URL` yet) -- that's expected:
-
-```bash
-gcloud run deploy ${SERVICE_NAME} \
-  --image ${REGION}-docker.pkg.dev/$(gcloud config get-value project)/cloud-run-source-deploy/${SERVICE_NAME} \
-  --region ${REGION} \
-  --platform managed \
-  --allow-unauthenticated \
-  --no-traffic \
-  --set-env-vars "TELEGRAM_BOT_TOKEN=<your-telegram-token>" \
-  --set-env-vars "OPENAI_API_KEY=<your-openai-key>" \
-  --set-env-vars "GOOGLE_SHEET_NAME=<exact spreadsheet title>" \
-  --set-env-vars "TIMEZONE=Europe/Kyiv" \
-  --set-env-vars "DEFAULT_TARGET_KCAL=1800" \
-  --set-env-vars "WEBHOOK_SECRET=<pick-any-random-string>"
-```
-
-Grab the service URL from the output (or from the Cloud Run console):
+## Architecture
 
 ```
-Service URL: https://calorie-bot-xxxxx-ew.a.run.app
+Telegram --> bot.py --> OpenAI API (nutrition extraction)
+                    \-> Google Sheets API (per-user logging)
+                    \-> Firestore (per-user config persistence)
 ```
 
-### 5.9) Deploy with the webhook URL
-
-Now redeploy with `WEBHOOK_URL` set. This is the real deploy:
-
-```bash
-gcloud run deploy ${SERVICE_NAME} \
-  --image ${REGION}-docker.pkg.dev/$(gcloud config get-value project)/cloud-run-source-deploy/${SERVICE_NAME} \
-  --region ${REGION} \
-  --platform managed \
-  --allow-unauthenticated \
-  --update-env-vars "WEBHOOK_URL=https://calorie-bot-xxxxx-ew.a.run.app"
-```
-
-Replace with your actual service URL. All other env vars carry over from step 5.8. Once live, the bot starts the webhook server on port 8080 and registers itself with Telegram.
-
-Notes:
-- `--allow-unauthenticated` is required so Telegram can reach the webhook endpoint.
-- Cloud Run scales to zero when idle (free). The first message after a cold period takes a few extra seconds while the container starts up.
-
-### 5.10) Verify it works
-
-1. Open your Telegram bot and send `/start`. You should get the help message.
-2. Send a meal, e.g. `2 яйця, тост з маслом`. It should reply with calories and macros and log to the sheet.
-3. If something is wrong, check logs:
-
-```bash
-gcloud run services logs read ${SERVICE_NAME} --region ${REGION} --limit 50
-```
-
-Or in the browser: **Cloud Run -> calorie-bot -> Logs** tab.
-
-### Updating the bot after code changes
-
-Rebuild and redeploy (env vars are preserved):
-
-```bash
-gcloud builds submit \
-  --tag ${REGION}-docker.pkg.dev/$(gcloud config get-value project)/cloud-run-source-deploy/${SERVICE_NAME}
-
-gcloud run deploy ${SERVICE_NAME} \
-  --image ${REGION}-docker.pkg.dev/$(gcloud config get-value project)/cloud-run-source-deploy/${SERVICE_NAME} \
-  --region ${REGION}
-```
-
-### Credentials file
-
-The `credentials.json` file is baked into the image via `COPY . .`. For production, consider using [Secret Manager](https://cloud.google.com/run/docs/configuring/secrets) to mount it as a volume instead.
-
-### Cost expectations
-
-A personal calorie bot stays well within the free tier:
-
-- **Cloud Run**: 2 million requests/month, 360,000 GB-seconds, 180,000 vCPU-seconds -- all free.
-- **Cloud Build**: 120 free build-minutes/day.
-- **Artifact Registry**: 500 MB free storage.
-
-### Troubleshooting
-
-- **"Permission denied" on deploy** -- run `gcloud auth login` again and check the project is correct.
-- **Bot does not reply** -- check logs. Common issues: wrong `TELEGRAM_BOT_TOKEN`, missing `WEBHOOK_URL`, or `credentials.json` not in the image.
-- **Sheets errors** -- make sure you shared the spreadsheet with the service account email and `GOOGLE_SHEET_NAME` matches exactly (including case).
-- **Cold start latency** -- first message after idle takes 3-5 seconds. This is normal with scale-to-zero.
-
-## Commands
-
-- **Send meal text** — e.g. `2 яйця, тост з маслом, кава з молоком` (rows go to `log`, then `daily` updates). Works in any language; ingredient names in the sheet are always Ukrainian.
-- `/today` — total kcal, target, deficit, and macros (P/F/C) for today.
-- `/settarget <kcal>` — set calorie target for today (`/settarget 2200 2026-04-14` for a specific date).
+- **Polling mode** for local development (`WEBHOOK_URL` empty).
+- **Webhook mode** for Cloud Run (`WEBHOOK_URL` set).
+- **Config backend** is pluggable: Firestore for production (survives cold starts), filesystem for local dev. Auto-detected based on environment.
 
 ## Notes
 
 - Calorie and macro estimates come from the model; treat as approximate.
-- The bot overwrites header row 1 if it does not match the expected layout (see above). If upgrading from an older version with fewer columns, insert the new columns (`protein`, `fat`, `carbs`) in the existing sheet or start fresh.
+- Ingredient names in the sheet are always Ukrainian regardless of input language.
+- OpenAI usage is billed to whoever deploys the bot. Only Google Sheets access is per-user.
+- The bot overwrites header row 1 if it doesn't match the expected layout. If upgrading from an older version, start a fresh sheet or manually add missing columns.
